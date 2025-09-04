@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.env
+
+# Streamlit
+.streamlit/
+
+# FFmpeg portable (si vous utilisez cette version)
+ffmpeg_portable/
+*.zip
+
+# Fichiers temporaires
+*.tmp
+*.log
