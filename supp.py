@@ -2,19 +2,13 @@ import streamlit as st
 import yt_dlp
 import os
 import tempfile
-from pathlib import Path
 import re
-import subprocess
-import io
-import zipfile
 import shutil
 
-# Configuration de la page
 st.set_page_config(
-    page_title="Convertisseur Musical Pro",
+    page_title="YouTube Audio Downloader",
     page_icon="🎵",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
 # CSS personnalisé
@@ -25,7 +19,6 @@ st.markdown("""
         color: #FF6B6B;
         font-size: 2.5em;
         margin-bottom: 30px;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
     }
     .feature-box {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -41,94 +34,8 @@ st.markdown("""
         color: white;
         margin: 10px 0;
     }
-    .warning-box {
-        background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
-        padding: 15px;
-        border-radius: 10px;
-        color: white;
-        margin: 10px 0;
-    }
-    .info-box {
-        background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%);
-        padding: 15px;
-        border-radius: 10px;
-        color: white;
-        margin: 10px 0;
-    }
 </style>
 """, unsafe_allow_html=True)
-
-@st.cache_resource
-def install_ffmpeg_cloud():
-    """Installe FFmpeg sur Streamlit Cloud"""
-    import platform
-    import urllib.request
-    import tarfile
-    
-    # Test si FFmpeg est déjà disponible
-    ffmpeg_local = os.path.join(os.path.expanduser("~"), "ffmpeg")
-    if os.path.exists(ffmpeg_local):
-        try:
-            subprocess.run([ffmpeg_local, '-version'], 
-                          stdout=subprocess.DEVNULL, 
-                          stderr=subprocess.DEVNULL, 
-                          check=True, timeout=10)
-            return ffmpeg_local, "FFmpeg local installé"
-        except:
-            pass
-    
-    # Test FFmpeg système
-    try:
-        subprocess.run(['ffmpeg', '-version'], 
-                      stdout=subprocess.DEVNULL, 
-                      stderr=subprocess.DEVNULL, 
-                      check=True, timeout=10)
-        return 'ffmpeg', "FFmpeg système détecté"
-    except:
-        pass
-    
-    # Installation FFmpeg statique sur Linux (Streamlit Cloud)
-    if platform.system() == "Linux" and platform.machine() == "x86_64":
-        try:
-            st.info("Installation de FFmpeg en cours... (peut prendre 1-2 minutes)")
-            
-            # URL du binaire FFmpeg statique
-            ffmpeg_url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
-            home_dir = os.path.expanduser("~")
-            
-            # Télécharger FFmpeg
-            with st.spinner("Téléchargement de FFmpeg..."):
-                urllib.request.urlretrieve(ffmpeg_url, f"{home_dir}/ffmpeg.tar.xz")
-            
-            # Extraire
-            with st.spinner("Extraction de FFmpeg..."):
-                with tarfile.open(f"{home_dir}/ffmpeg.tar.xz", 'r:xz') as tar:
-                    # Trouver le dossier extrait
-                    members = tar.getnames()
-                    ffmpeg_dir = members[0].split('/')[0]
-                    tar.extractall(home_dir)
-                
-                # Copier l'exécutable
-                extracted_ffmpeg = os.path.join(home_dir, ffmpeg_dir, "ffmpeg")
-                if os.path.exists(extracted_ffmpeg):
-                    shutil.copy2(extracted_ffmpeg, ffmpeg_local)
-                    os.chmod(ffmpeg_local, 0o755)
-                    
-                    # Nettoyer
-                    os.remove(f"{home_dir}/ffmpeg.tar.xz")
-                    shutil.rmtree(os.path.join(home_dir, ffmpeg_dir))
-                    
-                    return ffmpeg_local, "FFmpeg installé avec succès"
-        
-        except Exception as e:
-            st.error(f"Erreur d'installation FFmpeg: {str(e)}")
-    
-    return None, "FFmpeg non disponible"
-
-def check_ffmpeg():
-    """Vérifie la disponibilité de FFmpeg"""
-    ffmpeg_path, status = install_ffmpeg_cloud()
-    return ffmpeg_path is not None, ffmpeg_path, status
 
 def clean_filename(filename):
     """Nettoie le nom de fichier"""
@@ -136,38 +43,45 @@ def clean_filename(filename):
     cleaned = re.sub(r'[-\s]+', '_', cleaned)
     return cleaned[:50]
 
-def download_from_youtube(url, output_path, audio_format='mp3', quality='192', ffmpeg_path='ffmpeg'):
-    """Télécharge l'audio depuis YouTube"""
+def download_audio_direct(url, quality='192'):
+    """Télécharge directement l'audio sans conversion FFmpeg"""
     try:
+        temp_dir = tempfile.mkdtemp()
+        
+        # Configuration pour télécharger le meilleur audio disponible
         ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': audio_format,
-                'preferredquality': quality,
-            }],
-            'postprocessor_args': ['-ar', '44100', '-ac', '2'],
-            'prefer_ffmpeg': True,
-            'keepvideo': False,
+            'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio',
+            'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
             'no_warnings': True,
+            'extractaudio': False,  # Pas de conversion
         }
         
-        # Si FFmpeg n'est pas dans PATH, spécifier le chemin
-        if ffmpeg_path != 'ffmpeg' and os.path.exists(ffmpeg_path):
-            ydl_opts['ffmpeg_location'] = os.path.dirname(ffmpeg_path)
-        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # Récupère les infos
             info = ydl.extract_info(url, download=False)
             title = clean_filename(info.get('title', 'Unknown'))
             duration = info.get('duration', 0)
             
+            # Télécharge
             ydl.download([url])
             
-            for file in os.listdir(output_path):
-                if file.endswith(f'.{audio_format}'):
-                    return os.path.join(output_path, file), title, duration
-            
+            # Trouve le fichier téléchargé
+            for file in os.listdir(temp_dir):
+                if file.endswith(('.m4a', '.webm', '.opus', '.mp4')):
+                    file_path = os.path.join(temp_dir, file)
+                    
+                    # Détermine l'extension finale
+                    if file.endswith('.m4a'):
+                        final_ext = 'm4a'
+                    elif file.endswith('.webm'):
+                        final_ext = 'webm'
+                    else:
+                        final_ext = 'mp4'
+                    
+                    return file_path, title, duration, final_ext
+        
+        raise Exception("Aucun fichier audio trouvé")
+        
     except Exception as e:
         raise Exception(f"Erreur lors du téléchargement: {str(e)}")
 
@@ -180,146 +94,103 @@ def format_duration(seconds):
     return "N/A"
 
 def main():
-    st.markdown('<h1 class="main-header">🎵 Convertisseur Musical Pro</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">🎵 YouTube Audio Downloader</h1>', unsafe_allow_html=True)
     
-    # Vérification de FFmpeg
-    ffmpeg_available, ffmpeg_path, ffmpeg_status = check_ffmpeg()
+    st.markdown("""
+    <div class="feature-box">
+    <h3>📥 Téléchargement Audio depuis YouTube</h3>
+    <p>Version simplifiée sans FFmpeg - Télécharge directement l'audio dans le format disponible</p>
+    <p><strong>Formats supportés :</strong> M4A, WebM, MP4 (selon la disponibilité)</p>
+    </div>
+    """, unsafe_allow_html=True)
     
-    if not ffmpeg_available:
-        # Message spécifique pour Streamlit Cloud
-        st.markdown("""
-        <div class="warning-box">
-        <h4>⚠️ Configuration requise pour Streamlit Cloud</h4>
-        <p>Cette application nécessite FFmpeg. Pour le déploiement sur Streamlit Cloud :</p>
-        <ol>
-        <li>Créez un fichier <strong>packages.txt</strong> à la racine de votre projet</li>
-        <li>Ajoutez cette ligne dans le fichier : <code>ffmpeg</code></li>
-        <li>Commitez et pushez sur GitHub</li>
-        <li>Redéployez l'application</li>
-        </ol>
-        <p><strong>Structure du projet :</strong></p>
-        <pre>
-votre-projet/
-├── app.py
-├── requirements.txt
-├── packages.txt     ← AJOUTER CE FICHIER
-└── README.md
-        </pre>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown("""
-        <div class="info-box">
-        <h4>📝 Contenu de packages.txt</h4>
-        <p>Créez un fichier texte nommé exactement <strong>packages.txt</strong> avec ce contenu :</p>
-        <pre>ffmpeg</pre>
-        <p>Cela installera automatiquement FFmpeg lors du déploiement sur Streamlit Cloud.</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Version démo sans FFmpeg
-        st.markdown("""
-        <div class="feature-box">
-        <h3>🎯 Mode Démo</h3>
-        <p>En attendant la configuration FFmpeg, voici l'interface de l'application :</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Interface démo
-        with st.sidebar:
-            st.markdown("### ⚙️ Configuration")
-            mode = st.selectbox("Mode d'utilisation", ["📥 Télécharger depuis YouTube", "🔄 Convertir fichier local"])
-            quality = st.selectbox("Qualité audio", ["128", "192", "256", "320"], index=1)
-            output_format = st.selectbox("Format de sortie", ["mp3", "wav", "ogg", "flac"], index=0)
-            
-            st.markdown("### 📊 État")
-            st.error("❌ FFmpeg manquant")
-            st.info("🛠️ Configuration requise")
-        
-        # Interface principale démo
-        if mode == "📥 Télécharger depuis YouTube":
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                youtube_url = st.text_input("URL YouTube", placeholder="https://www.youtube.com/watch?v=...")
-            with col2:
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("🚀 Télécharger", type="primary"):
-                    st.error("Configuration FFmpeg requise pour cette fonctionnalité")
-        else:
-            uploaded_files = st.file_uploader("Sélectionnez vos fichiers audio", type=['mp3', 'wav', 'ogg'], accept_multiple_files=True)
-            if uploaded_files and st.button("🔄 Convertir", type="primary"):
-                st.error("Configuration FFmpeg requise pour cette fonctionnalité")
-        
-        return
-    
-    # Interface normale si FFmpeg disponible
+    # Configuration
     with st.sidebar:
         st.markdown("### ⚙️ Configuration")
-        mode = st.selectbox("Mode d'utilisation", ["📥 Télécharger depuis YouTube", "🔄 Convertir fichier local"])
-        quality = st.selectbox("Qualité audio", ["128", "192", "256", "320"], index=1)
-        output_format = st.selectbox("Format de sortie", ["mp3", "wav", "ogg", "flac"], index=0)
-        
+        quality = st.selectbox("Qualité préférée", ["96", "128", "192", "256"], index=2)
         st.markdown("### 📊 État")
-        st.success("✅ FFmpeg prêt")
-        st.info(f"📍 {ffmpeg_status}")
-        st.info(f"🎯 Format: {output_format.upper()}")
-        st.info(f"🔊 Qualité: {quality} kbps")
+        st.success("✅ Aucune dépendance externe")
+        st.info("🎯 Download direct")
+        st.info(f"🔊 Qualité: Meilleure disponible")
     
-    if mode == "📥 Télécharger depuis YouTube":
-        st.markdown("""
-        <div class="feature-box">
-        <h3>📥 Téléchargement depuis YouTube</h3>
-        <p>Téléchargez vos propres créations musicales depuis YouTube</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            youtube_url = st.text_input("URL YouTube de votre création", placeholder="https://www.youtube.com/watch?v=...")
-        
-        with col2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            download_btn = st.button("🚀 Télécharger", type="primary")
-        
-        if download_btn and youtube_url:
+    # Interface principale
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        youtube_url = st.text_input(
+            "URL YouTube de votre création",
+            placeholder="https://www.youtube.com/watch?v=...",
+            help="Collez ici l'URL de votre vidéo YouTube"
+        )
+    
+    with col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        download_btn = st.button("🚀 Télécharger", type="primary")
+    
+    if download_btn and youtube_url:
+        if not youtube_url.strip():
+            st.error("❌ Veuillez entrer une URL YouTube valide")
+        else:
             with st.spinner("🎵 Téléchargement en cours..."):
                 try:
-                    temp_dir = tempfile.mkdtemp()
+                    file_path, title, duration, file_ext = download_audio_direct(youtube_url, quality)
                     
-                    file_path, title, duration = download_from_youtube(
-                        youtube_url, temp_dir, output_format, quality, ffmpeg_path
-                    )
+                    # Détermine le type MIME
+                    mime_types = {
+                        'm4a': 'audio/mp4',
+                        'webm': 'audio/webm', 
+                        'mp4': 'video/mp4'
+                    }
+                    mime_type = mime_types.get(file_ext, 'audio/mpeg')
                     
                     st.markdown(f"""
                     <div class="success-box">
                     <h4>✅ Téléchargement réussi!</h4>
                     <p><strong>Titre:</strong> {title}</p>
                     <p><strong>Durée:</strong> {format_duration(duration)}</p>
-                    <p><strong>Format:</strong> {output_format.upper()} - {quality} kbps</p>
+                    <p><strong>Format:</strong> {file_ext.upper()}</p>
                     </div>
                     """, unsafe_allow_html=True)
                     
+                    # Bouton de téléchargement
                     with open(file_path, 'rb') as file:
                         st.download_button(
-                            label=f"💾 Télécharger {title}.{output_format}",
+                            label=f"💾 Télécharger {title}.{file_ext}",
                             data=file.read(),
-                            file_name=f"{title}.{output_format}",
-                            mime=f"audio/{output_format}",
+                            file_name=f"{title}.{file_ext}",
+                            mime=mime_type,
                             type="primary"
                         )
                     
-                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    # Nettoie le fichier temporaire
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
                     
                 except Exception as e:
                     st.error(f"❌ Erreur: {str(e)}")
     
-    # Footer
+    # Informations
     st.markdown("---")
     st.markdown("""
-    <div style="text-align: center; color: #666;">
-    <p>🎵 <strong>Convertisseur Musical Pro</strong> - Version Cloud-Friendly</p>
-    <p><small>✨ Optimisé pour Streamlit Cloud</small></p>
+    ### 📋 Informations importantes
+    
+    - **Format de sortie :** Dépend de la source YouTube (généralement M4A ou WebM)
+    - **Qualité :** Meilleure qualité disponible automatiquement sélectionnée
+    - **Compatibilité :** Fonctionne sur tous les navigateurs modernes
+    - **Légalité :** Utilisez uniquement avec du contenu dont vous possédez les droits
+    
+    ### 🔧 Pour la conversion de format
+    
+    Si vous avez besoin de convertir vers MP3 ou d'autres formats :
+    1. Téléchargez le fichier avec cette application
+    2. Utilisez un convertisseur en ligne comme [CloudConvert](https://cloudconvert.com)
+    3. Ou installez un logiciel local comme Audacity
+    """)
+    
+    st.markdown("""
+    <div style="text-align: center; color: #666; margin-top: 30px;">
+    <p>🎵 <strong>YouTube Audio Downloader</strong> - Version Cloud-Friendly</p>
+    <p><small>✨ Sans dépendances externes - Fonctionne partout</small></p>
     </div>
     """, unsafe_allow_html=True)
 
